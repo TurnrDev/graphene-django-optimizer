@@ -164,7 +164,7 @@ class QueryOptimizer(object):
                             model = getattr(graphene_type._meta, "model", None)
                             if model and name not in optimized_fields_by_model:
                                 field_model = optimized_fields_by_model[name] = model
-                                if field_model == model:
+                                if field_model == model and self._allowed_by_directives(selection.directives):
                                     self._optimize_field(
                                         store,
                                         model,
@@ -184,6 +184,34 @@ class QueryOptimizer(object):
         optimized = optimized_by_name or optimized_by_hints
         if not optimized:
             store.abort_only_optimization()
+
+    def _allowed_by_directives(self, directives):
+        # We're searching for a reason to now show the field, if we can't definitively
+        # find that reason, we will optimize for the field. If we can find a reason,
+        # we won't optimize for it, as it won't get called.
+
+        for directive in directives:
+            if directive.name.value == "include":
+                for argument in directive.arguments:
+                    if argument.name.value == "if":
+                        if argument.value.kind == "variable":
+                            if not bool(self._get_variable(argument.value.name.value, True)):
+                                return False
+                        elif argument.value.kind == "boolean_value":
+                            if not argument.value.value:
+                                return False
+                    elif argument.name.value == "else":
+                        if argument.value.kind == "variable":
+                            if bool(self._get_variable(argument.value.name.value, False)):
+                                return False
+                        elif argument.value.kind == "boolean_value":
+                            if argument.value.value:
+                                return False
+
+        return True
+
+    def _get_variable(self, *args, **kwargs):
+        return self.root_info.variable_values.get(*args, **kwargs)
 
     def _optimize_field_by_name(self, store, model, selection, field_def):
         name = self._get_name_from_resolver(field_def.resolve)
